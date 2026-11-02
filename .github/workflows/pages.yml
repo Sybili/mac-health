@@ -1,0 +1,38 @@
+# Publishes mac-check.sh to GitHub Pages so it can be fetched with a short URL:
+#   curl -sL https://sybili.github.io/mac-health | bash
+name: Publish script
+
+on:
+  push:
+    branches: [main]
+    paths: [mac-check.sh, .github/workflows/pages.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Syntax check
+        run: bash -n mac-check.sh
+      - name: Build site
+        run: |
+          mkdir _site
+          cp mac-check.sh _site/index.html
+          cp mac-check.sh _site/mac-check.sh
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+      - id: deployment
+        uses: actions/deploy-pages@v5
