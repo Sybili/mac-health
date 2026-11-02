@@ -17,8 +17,9 @@ curl -sL https://raw.githubusercontent.com/Sybili/mac-health/main/mac-check.sh |
 
 > Open Terminal with `Cmd + Space`, type "Terminal", press Enter.
 
-The automatic checks take about 3 seconds. The hands-on display and speaker
-tests take about a minute. Skip them with `--quick`.
+The automatic checks take about 3 seconds. The hands-on tests (screen,
+keyboard, camera, speakers, microphone) take about 3 minutes. Skip them with
+`--quick`.
 
 ## What it checks
 
@@ -33,19 +34,34 @@ tests take about a minute. Skip them with `--quick`.
 | **Built-in hardware** | Internal display, keyboard/trackpad, camera, Wi-Fi, Bluetooth, speakers, microphone (does macOS detect them?) |
 | **Stability** | Kernel panics in the logs, thermal throttling |
 
-### Hands-on (you look and listen, then answer y/n)
+### Hands-on (you look, press and listen)
 
 - **Display:** the screen turns white, black, red, green, blue and gray, full
   screen with no menu bar or Dock. Look for dead or stuck pixels, spots, stains
   and uneven backlight. Click or press any key for the next colour, Esc to stop.
+- **Keyboard:** a window shows the built-in keyboard in its real layout
+  (US ANSI or European ISO, with German labels on a German keyboard). Press
+  every key once; each one turns green when macOS registers it, including fn,
+  both Shift, Option and Command keys, Caps Lock and the arrows. Hold fn for
+  F1 to F12. The window closes by itself when every key is green, and the script
+  lists any key that never registered.
+- **Camera:** a window shows the live image from the built-in camera for up to
+  30 seconds, so you can check sharpness and colours and that the green light
+  turns on.
 - **Speakers:** chimes on the left speaker only, then the right speaker only,
   then a rising tone from 60 Hz to 10 kHz on both, which makes crackling,
-  buzzing and rattling easy to hear. If headphones or AirPods are connected,
-  the test asks you to disconnect them first. If the volume is muted or very
-  low, it is raised to 60 % for the test and restored afterwards.
+  buzzing and rattling easy to hear.
+- **Microphone:** records 4 seconds while you talk, measures the level (a dead
+  microphone is detected automatically), then plays the recording back.
 
-Every hands-on step can be repeated (`r`) or skipped (`s`). Skipped tests are
-listed as "Not tested" in the result and don't change the score.
+If headphones, AirPods or an iPhone are the current audio device, the tests ask
+you to disconnect them first. A muted or very low volume is raised for the
+tests and restored afterwards. Every step can be repeated (`r`) or skipped
+(`s`). Skipped tests are listed as "Not tested" and don't change the score.
+
+The first camera and microphone test on a Mac shows the macOS prompt
+"Terminal would like to access the camera / microphone". Click **Allow**. If
+access was denied before, the test is skipped with a pointer to Photo Booth.
 
 ## The result
 
@@ -56,7 +72,7 @@ At the end it prints:
 - every **deduction**, so you can see why points were lost,
 - what was **not tested**,
 - a **rough battery outlook**: years until the battery hits 80 % at the wear rate so far,
-- a short **manual checklist** for what a script cannot test (keys, ports, body).
+- a short **manual checklist** for what a script cannot test (trackpad, Touch ID, ports, Wi-Fi).
 
 ### Blockers
 
@@ -88,8 +104,12 @@ cost at most 35 points, because a battery can be replaced.
 | Wi-Fi / Bluetooth / camera not detected | -15 / -10 / -10 |
 | Speakers / microphone not detected | -5 each |
 | Display test: defects seen | -15 |
+| Keyboard test: a main key never registered | -15 |
+| Keyboard test: an F-key never registered | warning only (macOS can claim F-keys for shortcuts) |
+| Camera test: image or light faulty | -10 |
 | Speaker test: left or right speaker failed | -10 each |
 | Speaker test: crackling, buzzing or rattling | -10 |
+| Microphone test: no sound picked up / recording unclear | -15 / -10 |
 | Kernel panics: 1 / 2-3 / 4+ | -5 / -10 / -20 |
 | SIP disabled | -10 |
 | Possible MDM-bypass traces | -15 |
@@ -98,8 +118,8 @@ cost at most 35 points, because a battery can be replaced.
 
 ## Recommended routine at the meetup
 
-1. Run the check on the seller's account, including the display and speaker tests.
-2. Do the manual checks the script prints (every key, every port, the body).
+1. Run the check on the seller's account, including the hands-on tests.
+2. Do the manual checks the script prints (trackpad, Touch ID, every port, Wi-Fi).
 3. Seller signs out of their Apple Account, then you run the check again
    (`--quick` is enough). Activation Lock must say **Disabled**.
 4. Seller erases the Mac in front of you:
@@ -109,8 +129,13 @@ cost at most 35 points, because a battery can be replaced.
 ## Privacy and safety
 
 - **Nothing installed, nothing kept.** The automatic checks only read. The
-  hands-on tests open a full-screen window and play sounds generated in memory;
-  no files are written. A raised volume is put back when the test ends.
+  hands-on tests open windows and play sounds generated in memory. The
+  4-second microphone recording goes to a temporary folder that is deleted
+  right after playback, also on Ctrl-C. A raised volume is put back when the
+  tests end.
+- **Camera and microphone permission.** macOS remembers the "Allow" for
+  Terminal until the Mac is erased, or until it is removed in System Settings >
+  Privacy & Security.
 - **Offline.** The script makes no network requests; only the `curl` that downloads it does.
 - **No admin password.** Runs as the logged-in user.
 - The Apple Account e-mail address is never printed, only whether someone is signed in.
@@ -130,15 +155,18 @@ curl -sL https://sybili.github.io/mac-health | bash -s -- --no-color
 
 | Option | Effect |
 |---|---|
-| `--quick` | Skip the hands-on display and speaker tests |
+| `--quick` | Skip the hands-on tests |
 | `--no-color` | Plain output |
 | `--help` / `--version` | Usage / version |
 
 ## Limits
 
 - It reads what macOS reports plus what you see and hear in the tests. It cannot
-  find sticky keys, dents, liquid damage or a port that is loose but still detected.
+  find sticky or mushy keys, dents, liquid damage or a port that is loose but
+  still detected.
+- macOS uses some F-keys for system shortcuts (F11 shows the desktop), so those
+  may not reach the keyboard test. They are reported as a warning, not a fault.
 - SSD wear (percentage used, data written) needs `smartctl`, which is rarely installed.
 - The battery outlook is a straight-line estimate from wear so far, so treat it as rough.
-- For a fuller guided test (every key, ports, lid sensor) with a PDF report,
+- For a fuller guided test (trackpad, ports, lid sensor) with a PDF report,
   [Aman Check](https://github.com/MidZai/aman_check) is a good native app to use alongside this.

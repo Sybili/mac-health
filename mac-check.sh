@@ -3,15 +3,17 @@
 #
 #   curl -sL https://sybili.github.io/mac-health | bash
 #
-# The automatic part only reads: nothing is installed, changed or sent
-# anywhere, and no admin password is needed. The optional hands-on tests show
-# full-screen colours and play test tones; if the volume is very low it is
-# raised for the test and restored afterwards. Runs on the stock /bin/bash 3.2.
+# The automatic part only reads: nothing is installed or sent anywhere, and no
+# admin password is needed. The optional hands-on tests show full-screen
+# colours, a keyboard tester and the live camera image, play test tones and
+# record a short clip that is deleted after playback. macOS asks once whether
+# Terminal may use the camera and microphone. A muted or very low volume is
+# raised for the tests and restored afterwards. Runs on the stock /bin/bash 3.2.
 #
 # Everything lives inside main() so bash parses the whole file before running
 # anything: safe when the script is piped straight from curl.
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 usage() {
   cat <<'EOF'
@@ -22,10 +24,11 @@ Usage:
   curl -sL https://sybili.github.io/mac-health | bash -s -- --quick
   bash mac-check.sh [--quick] [--no-color] [--help] [--version]
 
-Reads hardware, battery, storage and lock state, runs a display and speaker
-test with you, then prints a health score (0-100) and a buy / don't-buy verdict.
+Reads hardware, battery, storage and lock state, runs screen, keyboard,
+camera, speaker and microphone tests with you, then prints a health score
+(0-100) and a buy / don't-buy verdict.
 
-  --quick     skip the hands-on display and speaker tests
+  --quick     skip the hands-on tests
   --no-color  plain output
 EOF
 }
@@ -444,11 +447,16 @@ check_stability() {
 }
 
 # ---------- hands-on tests ----------
+#
+# The test windows and sounds are small JavaScript for Automation programs
+# run by osascript, so nothing has to be installed. Each block is loaded with
+# read -d '' (not $(cat <<...)) because bash 3.2 mis-parses quotes inside a
+# here-document in a command substitution.
 
 # Full-screen colour test on every connected screen. A borderless,
 # non-activating panel gets key presses even though osascript was started
 # from the Terminal. Click or any key: next colour. Esc: stop.
-DISPLAY_JS=$(cat <<'JS'
+IFS= read -r -d '' DISPLAY_JS <<'JS'
 ObjC.import('Cocoa');
 function run() {
   var app = $.NSApplication.sharedApplication;
@@ -491,13 +499,264 @@ function run() {
   app.run;
 }
 JS
-)
 
-# Test tones, generated in memory as a WAV and played with AVAudioPlayer.
-# "left"/"right": three chimes panned fully to one side. "sweep": a rising
-# tone from 60 Hz to 10 kHz on both sides, which makes rattles and crackling
-# easy to hear. Prints "ok" when the sound was played.
-AUDIO_JS=$(cat <<'JS'
+# Keyboard test: draws the built-in keyboard (ANSI or ISO, German or US
+# labels) and turns each key green when its key code arrives. Modifiers and
+# fn come in as flagsChanged events. Prints TOTAL, PRESSED, MISSING_MAIN and
+# MISSING_TOP lines when the window closes.
+IFS= read -r -d '' KEYBOARD_JS <<'JS'
+ObjC.import('Cocoa');
+function run(argv) {
+  var iso = argv[0] === 'iso', de = argv[1] === 'de';
+  var app = $.NSApplication.sharedApplication;
+  app.setActivationPolicy(0);
+
+  // [keyCode, US label, German label, width in key units, report name]
+  function k(code, us, gr, w, name) { return { code: code, label: de ? gr : us, w: w || 1, name: name || (de ? gr : us) }; }
+  function fkey(n, code) { var key = k(code, 'F' + n, 'F' + n); key.top = true; return key; }
+  var rows = [
+    [k(53, 'esc', 'esc', 1.5), fkey(1, 122), fkey(2, 120), fkey(3, 99), fkey(4, 118), fkey(5, 96), fkey(6, 97),
+     fkey(7, 98), fkey(8, 100), fkey(9, 101), fkey(10, 109), fkey(11, 103), fkey(12, 111)],
+    [iso ? k(10, '§', '^') : k(50, '`', '^'), k(18, '1', '1'), k(19, '2', '2'), k(20, '3', '3'), k(21, '4', '4'),
+     k(23, '5', '5'), k(22, '6', '6'), k(26, '7', '7'), k(28, '8', '8'), k(25, '9', '9'), k(29, '0', '0'),
+     k(27, '-', 'ß'), k(24, '=', '´'), k(51, '⌫', '⌫', 1.5, 'delete')],
+    [k(48, '⇥', '⇥', 1.5, 'tab'), k(12, 'Q', 'Q'), k(13, 'W', 'W'), k(14, 'E', 'E'), k(15, 'R', 'R'), k(17, 'T', 'T'),
+     k(16, 'Y', 'Z'), k(32, 'U', 'U'), k(34, 'I', 'I'), k(31, 'O', 'O'), k(35, 'P', 'P'), k(33, '[', 'Ü'), k(30, ']', '+')]
+      .concat(iso ? [] : [k(42, '\\', '#')]),
+    [k(57, '⇪', '⇪', iso ? 1.6 : 1.75, 'caps lock'), k(0, 'A', 'A'), k(1, 'S', 'S'), k(2, 'D', 'D'), k(3, 'F', 'F'),
+     k(5, 'G', 'G'), k(4, 'H', 'H'), k(38, 'J', 'J'), k(40, 'K', 'K'), k(37, 'L', 'L'), k(41, ';', 'Ö'), k(39, "'", 'Ä')]
+      .concat(iso ? [k(42, '\\', '#')] : [k(36, '↩', '↩', 1.75, 'return')]),
+    (iso ? [k(56, '⇧', '⇧', 1.25, 'left shift'), k(50, '`', '<')] : [k(56, '⇧', '⇧', 2.25, 'left shift')])
+      .concat([k(6, 'Z', 'Y'), k(7, 'X', 'X'), k(8, 'C', 'C'), k(9, 'V', 'V'), k(11, 'B', 'B'), k(45, 'N', 'N'),
+               k(46, 'M', 'M'), k(43, ',', ','), k(47, '.', '.'), k(44, '/', '-'), k(60, '⇧', '⇧', 2.25, 'right shift')]),
+    [k(63, 'fn', 'fn', 1), k(59, '⌃', '⌃', 1, 'control'), k(58, '⌥', '⌥', 1, 'left option'), k(55, '⌘', '⌘', 1.25, 'left command'),
+     k(49, '', '', 5, 'space'), k(54, '⌘', '⌘', 1.25, 'right command'), k(61, '⌥', '⌥', 1, 'right option'),
+     k(123, '←', '←', 1, 'left'), 'updown', k(124, '→', '→', 1, 'right')]
+  ];
+
+  var U = 48, G = 5, M = 24, HEAD = 78, FOOT = 56, TOPROW = 0.65 * U;
+  var W = 14.5 * U + 2 * M, H = HEAD + TOPROW + 5 * U + FOOT;
+  var GRAY = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.27, 0.27, 0.29, 1);
+  var GREEN = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.18, 0.62, 0.30, 1);
+  var keys = {}, total = 0, pressed = 0, finished = false, win, content, counter;
+
+  // align: 0 left, 1 centre (AppKit values on Apple silicon)
+  function label(text, x, y, w, h, size, color, align) {
+    var tf = $.NSTextField.wrappingLabelWithString(text);
+    tf.setFrame($.NSMakeRect(x, y, w, h));
+    tf.setFont($.NSFont.systemFontOfSize(size));
+    tf.setTextColor(color || $.NSColor.whiteColor);
+    tf.setAlignment(align === undefined ? 1 : align);
+    return tf;
+  }
+  // x, w in key units; top in points from the top edge of the key area
+  function addKey(key, x, top, w, h) {
+    var box = $.NSBox.alloc.initWithFrame($.NSMakeRect(M + x * U + G / 2, H - HEAD - top - h + G / 2, w * U - G, h - G));
+    box.setBoxType(4); box.setBorderWidth(0); box.setCornerRadius(6); box.setTitlePosition(0);
+    box.setContentViewMargins($.NSMakeSize(0, 0)); box.setFillColor(GRAY);
+    box.contentView.addSubview(label(key.label, 0, (h - G - 17) / 2, w * U - G, 17, 13));
+    content.addSubview(box);
+    key.box = box; keys[key.code] = key; total++;
+  }
+
+  function finish() {
+    if (finished) return;
+    finished = true;
+    var main = [], top = [];
+    Object.keys(keys).forEach(function (c) {
+      var key = keys[c];
+      if (!key.done) (key.top ? top : main).push(key.name);
+    });
+    var text = 'TOTAL ' + total + '\nPRESSED ' + pressed + '\nMISSING_MAIN ' + main.join('  ') + '\nMISSING_TOP ' + top.join('  ') + '\n';
+    $.NSFileHandle.fileHandleWithStandardOutput.writeData($(text).dataUsingEncoding($.NSUTF8StringEncoding));
+    app.terminate(null);
+  }
+  function mark(code) {
+    var key = keys[code];
+    if (!key || key.done) return;
+    key.done = true; pressed++;
+    key.box.setFillColor(GREEN);
+    counter.setStringValue(pressed + ' of ' + total + ' keys registered');
+    if (pressed === total) {
+      counter.setStringValue('All ' + total + ' keys registered');
+      $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(0.8, helper, 'finish:', null, false);
+    }
+  }
+
+  ObjC.registerSubclass({
+    name: 'MCKeyPanel', superclass: 'NSPanel',
+    methods: {
+      'canBecomeKeyWindow': { types: ['bool', []], implementation: function () { return true; } },
+      'acceptsFirstMouse:': { types: ['bool', ['id']], implementation: function () { return true; } },
+      'keyDown:': { types: ['void', ['id']], implementation: function (e) { mark(e.keyCode); } },
+      'flagsChanged:': { types: ['void', ['id']], implementation: function (e) { mark(e.keyCode); } },
+      'performKeyEquivalent:': { types: ['bool', ['id']], implementation: function (e) { if (e.type == 10) mark(e.keyCode); return true; } },
+      'cancelOperation:': { types: ['void', ['id']], implementation: function () {} }
+    }
+  });
+  ObjC.registerSubclass({
+    name: 'MCKeyHelper', superclass: 'NSObject',
+    methods: { 'finish:': { types: ['void', ['id']], implementation: function () { finish(); } } }
+  });
+  var helper = $.MCKeyHelper.alloc.init;
+
+  var screen = $.NSScreen.mainScreen.visibleFrame;
+  win = $.MCKeyPanel.alloc.initWithContentRectStyleMaskBackingDefer(
+    $.NSMakeRect(screen.origin.x + (screen.size.width - W) / 2, screen.origin.y + (screen.size.height - H) / 2, W, H), 128, 2, false);
+  win.setLevel(1000); win.setCollectionBehavior(1 | 256); win.setHidesOnDeactivate(false);
+  win.setOpaque(false); win.setHasShadow(true);
+  win.setBackgroundColor($.NSColor.clearColor);
+  content = win.contentView;
+  var bg = $.NSBox.alloc.initWithFrame(content.bounds);
+  bg.setBoxType(4); bg.setBorderWidth(0); bg.setCornerRadius(14); bg.setTitlePosition(0);
+  bg.setFillColor($.NSColor.colorWithSRGBRedGreenBlueAlpha(0.11, 0.11, 0.12, 1));
+  content.addSubview(bg);
+
+  var dim = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.7, 0.7, 0.72, 1);
+  content.addSubview(label('Keyboard test', M, H - 38, W - 2 * M, 22, 17, null, 0));
+  content.addSubview(label('Press every key once. Keys turn green when macOS registers them. Hold fn for F1 to F12. ' +
+    'If nothing lights up, click this window once.', M, H - 68, W - 2 * M, 30, 12, dim, 0));
+
+  var top = 0;
+  rows.forEach(function (row, r) {
+    var h = r === 0 ? TOPROW : U, x = 0;
+    row.forEach(function (key) {
+      if (key === 'updown') {
+        addKey(k(126, '↑', '↑', 1, 'up'), x, top, 1, h / 2 + G / 2);
+        addKey(k(125, '↓', '↓', 1, 'down'), x, top + h / 2 - G / 2, 1, h / 2 + G / 2);
+        x += 1; return;
+      }
+      addKey(key, x, top, key.w, h);
+      x += key.w;
+    });
+    // ISO Return spans the second and third letter rows at the right edge
+    if (iso && r === 2) addKey(k(36, '↩', '↩', 0.9, 'return'), 13.6, top, 0.9, 2 * U);
+    top += h;
+  });
+
+  counter = label('0 of ' + total + ' keys registered', M, 18, 400, 20, 13, dim, 0);
+  content.addSubview(counter);
+  var btn = $.NSButton.buttonWithTitleTargetAction('Done', helper, 'finish:');
+  btn.setFrame($.NSMakeRect(W - M - 90, 12, 90, 32));
+  btn.setRefusesFirstResponder(true);
+  content.addSubview(btn);
+
+  win.makeKeyAndOrderFront(null);
+  app.activateIgnoringOtherApps(true);
+  // Never leave the window up forever
+  $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(300, helper, 'finish:', null, false);
+  app.run;
+}
+JS
+
+# Camera access and live preview. "status <vide|soun>" and "auth <vide|soun>"
+# print the permission state (3 = allowed); "show" opens the live image.
+IFS= read -r -d '' CAPTURE_JS <<'JS'
+ObjC.import('Cocoa');
+ObjC.import('AVFoundation');
+// The capture classes live in a sub-framework without scripting metadata,
+// so look them up by name.
+function cls(name) { return $.NSClassFromString(name); }
+function out(s) {
+  $.NSFileHandle.fileHandleWithStandardOutput.writeData($(s + '\n').dataUsingEncoding($.NSUTF8StringEncoding));
+}
+// 0 not asked yet, 1 restricted, 2 denied, 3 allowed
+function status(type) { return Number(cls('AVCaptureDevice').authorizationStatusForMediaType(type)); }
+function device(type) {
+  if (type === 'vide') {
+    var found = cls('AVCaptureDeviceDiscoverySession').discoverySessionWithDeviceTypesMediaTypePosition(
+      $(['AVCaptureDeviceTypeBuiltInWideAngleCamera']), 'vide', 0).devices;
+    if (found.count > 0) return found.objectAtIndex(0);
+  }
+  return cls('AVCaptureDevice').defaultDeviceWithMediaType(type);
+}
+// Opening the device makes macOS show its permission prompt once; then wait
+// (up to a minute) for the answer.
+function auth(type) {
+  var st = status(type);
+  if (st !== 0) return st;
+  var dev = device(type);
+  if (!dev || dev.isNil()) return -1;
+  var session = cls('AVCaptureSession').alloc.init;
+  var input = cls('AVCaptureDeviceInput').deviceInputWithDeviceError(dev, null);
+  if (input && !input.isNil() && session.canAddInput(input)) session.addInput(input);
+  session.startRunning;
+  for (var i = 0; i < 600 && st === 0; i++) { delay(0.1); st = status(type); }
+  session.stopRunning;
+  return st;
+}
+// Live camera image in a window; click or any key closes it.
+function show() {
+  var dev = device('vide');
+  if (!dev || dev.isNil()) return out('nocamera');
+  if (status('vide') !== 3) return out('denied');
+  var input = cls('AVCaptureDeviceInput').deviceInputWithDeviceError(dev, null);
+  var session = cls('AVCaptureSession').alloc.init;
+  if (!input || input.isNil() || !session.canAddInput(input)) return out('fail');
+  session.addInput(input);
+
+  var app = $.NSApplication.sharedApplication;
+  app.setActivationPolicy(0);
+  var closed = false;
+  function close() {
+    if (closed) return;
+    closed = true; session.stopRunning; out('ok'); app.terminate(null);
+  }
+  ObjC.registerSubclass({
+    name: 'MCCamPanel', superclass: 'NSPanel',
+    methods: {
+      'canBecomeKeyWindow': { types: ['bool', []], implementation: function () { return true; } },
+      'acceptsFirstMouse:': { types: ['bool', ['id']], implementation: function () { return true; } },
+      'keyDown:': { types: ['void', ['id']], implementation: function () { close(); } },
+      'mouseDown:': { types: ['void', ['id']], implementation: function () { close(); } }
+    }
+  });
+  ObjC.registerSubclass({
+    name: 'MCCamHelper', superclass: 'NSObject',
+    methods: { 'close:': { types: ['void', ['id']], implementation: function () { close(); } } }
+  });
+
+  var W = 720, H = 500, CAP = 52, s = $.NSScreen.mainScreen.visibleFrame;
+  var win = $.MCCamPanel.alloc.initWithContentRectStyleMaskBackingDefer(
+    $.NSMakeRect(s.origin.x + (s.size.width - W) / 2, s.origin.y + (s.size.height - H) / 2, W, H), 128, 2, false);
+  win.setLevel(1000); win.setCollectionBehavior(1 | 256); win.setHidesOnDeactivate(false);
+  win.setBackgroundColor($.NSColor.colorWithSRGBRedGreenBlueAlpha(0.11, 0.11, 0.12, 1));
+  var content = win.contentView;
+
+  var video = $.NSView.alloc.initWithFrame($.NSMakeRect(0, CAP, W, H - CAP));
+  video.setWantsLayer(true);
+  var layer = cls('AVCaptureVideoPreviewLayer').layerWithSession(session);
+  layer.setFrame(video.bounds);
+  layer.setVideoGravity('AVLayerVideoGravityResizeAspect');
+  video.layer.addSublayer(layer);
+  content.addSubview(video);
+
+  var caption = $.NSTextField.wrappingLabelWithString('Live image from ' + ObjC.unwrap(dev.localizedName) +
+    '. Check it is sharp with natural colours and that the green light next to the camera is on. ' +
+    'Click or press any key to close.');
+  caption.setFrame($.NSMakeRect(16, 6, W - 32, CAP - 10));
+  caption.setFont($.NSFont.systemFontOfSize(12));
+  caption.setTextColor($.NSColor.colorWithSRGBRedGreenBlueAlpha(0.8, 0.8, 0.82, 1));
+  content.addSubview(caption);
+
+  session.startRunning;
+  win.makeKeyAndOrderFront(null);
+  app.activateIgnoringOtherApps(true);
+  $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(30, $.MCCamHelper.alloc.init, 'close:', null, false);
+  app.run;
+}
+function run(argv) {
+  if (argv[0] === 'status') return String(status(argv[1]));
+  if (argv[0] === 'auth') return String(auth(argv[1]));
+  show();
+}
+JS
+
+# Sounds and recording. "left"/"right": three chimes panned fully to one
+# side. "sweep": a rising tone from 60 Hz to 10 kHz on both sides, which makes
+# rattles and crackling easy to hear. "record <file>": 4 seconds from the
+# microphone, prints "ok <peak dB>". "play <file>": plays a recording back.
+IFS= read -r -d '' AUDIO_JS <<'JS'
 ObjC.import('AVFoundation');
 function wav(seconds, fn) {
   var rate = 22050, n = Math.floor(seconds * rate), len = 44 + n * 2, b = new Array(len), i;
@@ -517,8 +776,34 @@ function wav(seconds, fn) {
   }
   return out.join('');
 }
+function play(player, seconds) {
+  if (!player || player.isNil() || !player.play) return 'fail';
+  delay(seconds + 0.2);
+  return 'ok';
+}
+// Records 4 seconds from the default input and prints "ok <peak dB>".
+function record(path) {
+  var settings = $({ AVFormatIDKey: 1819304813, AVSampleRateKey: 44100, AVNumberOfChannelsKey: 1,
+    AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false });
+  var rec = $.AVAudioRecorder.alloc.initWithURLSettingsError($.NSURL.fileURLWithPath(path), settings, null);
+  if (!rec || rec.isNil()) return 'fail';
+  rec.setMeteringEnabled(true);
+  if (!rec.record) return 'fail';
+  var peak = -160;
+  for (var i = 0; i < 40; i++) {
+    delay(0.1); rec.updateMeters;
+    peak = Math.max(peak, rec.peakPowerForChannel(0));
+  }
+  rec.stop;
+  return 'ok ' + Math.round(peak);
+}
 function run(argv) {
   var mode = argv[0], T, fn, pan = 0;
+  if (mode === 'record') return record(argv[1]);
+  if (mode === 'play') {
+    var p = $.AVAudioPlayer.alloc.initWithContentsOfURLError($.NSURL.fileURLWithPath(argv[1]), null);
+    return play(p, p.isNil() ? 0 : p.duration);
+  }
   if (mode === 'sweep') {
     T = 4;
     var f0 = 60, f1 = 10000, k = Math.log(f1 / f0);
@@ -537,18 +822,25 @@ function run(argv) {
   var player = $.AVAudioPlayer.alloc.initWithDataError(data, null);
   if (!player || player.isNil()) return 'fail';
   player.setPan(pan);
-  if (!player.play) return 'fail';
-  delay(T + 0.2);
-  return 'ok';
+  return play(player, T);
 }
 JS
-)
 
 have_tty() { (exec </dev/tty) 2>/dev/null; }
 
+# Drops keys that reached the Terminal while a test window was open, so they
+# can't be read as the answer to the next question.
+flush_tty() {
+  local old; old=$(stty -g </dev/tty 2>/dev/null) || return 0
+  # Non-blocking read of whatever is waiting (bash's own read -n would block)
+  stty -icanon min 0 time 0 </dev/tty 2>/dev/null
+  dd bs=4096 count=1 </dev/tty >/dev/null 2>&1
+  stty "$old" </dev/tty 2>/dev/null
+}
+
 # ask <question> <letters>: reads an answer from the terminal (stdin is the
-# script itself when piped from curl). Enter picks the first letter. Stray
-# keys pressed during the colour test are ignored: only the last letter counts.
+# script itself when piped from curl). Enter picks the first letter; only the
+# last letter typed counts.
 ask() {
   local ans
   while :; do
@@ -561,21 +853,83 @@ ask() {
   done
 }
 
-# Prints "<1 if built-in> <device name>" for the current default audio output.
-default_output() {
-  system_profiler -json SPAudioDataType 2>/dev/null | awk -F'" : "' '
+# default_device <output|input>: "<1 if built-in> <name>" of the default device.
+default_device() {
+  system_profiler -json SPAudioDataType 2>/dev/null | awk -F'" : "' -v key="\"coreaudio_default_audio_$1_device\" : \"spaudio_yes\"" '
     function flush() { if (def) { print (bi ? 1 : 0) " " name; found = 1 } }
     /"_name"/ { flush(); name = $2; sub(/",?$/, "", name); def = 0; bi = 0 }
-    /"coreaudio_default_audio_output_device" : "spaudio_yes"/ { def = 1 }
+    index($0, key) { def = 1 }
     /coreaudio_device_type_builtin/ { bi = 1 }
     END { if (!found) flush() }'
 }
 
-restore_volume() {
-  [ "$VOL_CHANGED" = 1 ] || return 0
-  osascript -e "set volume output volume $VOL_OLD" >/dev/null 2>&1
-  [ "$MUTED_OLD" = true ] && osascript -e 'set volume output muted true' >/dev/null 2>&1
-  VOL_CHANGED=0
+# require_builtin <output|input> <what>: waits until sound plays through (or
+# is recorded from) the built-in hardware. Fails if the user skips.
+require_builtin() {
+  local dev
+  while :; do
+    dev=$(default_device "$1")
+    [ -z "$dev" ] && return 0
+    [ "${dev%% *}" = 1 ] && return 0
+    printf '  %sThe %s is "%s", not the built-in %s.%s\n' "$YEL" "$1" "${dev#* }" "$2" "$RST"
+    ask "Disconnect headphones, AirPods or iPhone, then press Enter (s = skip)." "ys"
+    [ "$ANSWER" = s ] && return 1
+  done
+}
+
+# media_access <vide|soun> <what> <Settings name>: makes sure Terminal may
+# use the camera or microphone. macOS asks once; the answer sticks.
+media_access() {
+  local st
+  st=$(osascript -l JavaScript -e "$CAPTURE_JS" status "$1" 2>/dev/null)
+  if [ "$st" = 0 ]; then
+    printf '  %smacOS will ask whether Terminal may use the %s: click Allow.%s\n' "$YEL" "$2" "$RST"
+    st=$(osascript -l JavaScript -e "$CAPTURE_JS" auth "$1" 2>/dev/null)
+  fi
+  case "$st" in
+    3) return 0 ;;
+    -1) row na "$3 test" "No $2 found" ;;
+    *) row na "$3 test" "Terminal may not use the $2" "Allow it in System Settings > Privacy & Security > $3, or use Photo Booth" ;;
+  esac
+  NOT_TESTED+=("$2")
+  return 1
+}
+
+# Volume is raised only when it is muted or too low to hear, and put back by
+# cleanup(). Same for the microphone input level.
+raise_volume() {
+  [ -n "$VOL_OLD" ] && return 0
+  VOL_OLD=$(osascript -e 'output volume of (get volume settings)' 2>/dev/null)
+  MUTED_OLD=$(osascript -e 'output muted of (get volume settings)' 2>/dev/null)
+  if [ "$MUTED_OLD" = true ] || { is_int "$VOL_OLD" && [ "$VOL_OLD" -lt 40 ]; }; then
+    is_int "$VOL_OLD" || VOL_OLD=50
+    osascript -e 'set volume output volume 60' -e 'set volume output muted false' >/dev/null 2>&1
+    VOL_CHANGED=1
+    printf '  %sVolume raised to 60 %% for the tests, restored afterwards.%s\n' "$DIM" "$RST"
+  fi
+}
+
+raise_input() {
+  [ -n "$IN_OLD" ] && return 0
+  IN_OLD=$(osascript -e 'input volume of (get volume settings)' 2>/dev/null)
+  if is_int "$IN_OLD" && [ "$IN_OLD" -lt 30 ]; then
+    osascript -e 'set volume input volume 70' >/dev/null 2>&1
+    IN_CHANGED=1
+  fi
+}
+
+cleanup() {
+  if [ "$VOL_CHANGED" = 1 ]; then
+    osascript -e "set volume output volume $VOL_OLD" >/dev/null 2>&1
+    [ "$MUTED_OLD" = true ] && osascript -e 'set volume output muted true' >/dev/null 2>&1
+    VOL_CHANGED=0
+  fi
+  if [ "$IN_CHANGED" = 1 ]; then
+    osascript -e "set volume input volume $IN_OLD" >/dev/null 2>&1
+    IN_CHANGED=0
+  fi
+  [ -n "$TMP_DIR" ] && rm -rf "$TMP_DIR"
+  TMP_DIR=""
 }
 
 test_display() {
@@ -586,6 +940,7 @@ test_display() {
     ask "Press Enter to start (s = skip)." "ys"
     if [ "$ANSWER" = s ]; then NOT_TESTED+=("display"); row na "Display test" "Skipped"; return; fi
     osascript -l JavaScript -e "$DISPLAY_JS" >/dev/null 2>&1
+    flush_tty
     ask "Dead pixels, spots or stains seen? [n = all clean / y = problems / r = repeat]" "nyr"
     [ "$ANSWER" = r ] || break
   done
@@ -597,30 +952,73 @@ test_display() {
   fi
 }
 
+test_keyboard() {
+  if [ "$LAPTOP" != 1 ]; then NOT_TESTED+=("keyboard"); row na "Keyboard test" "No built-in keyboard"; return; fi
+  # Physical layout of the built-in keyboard: 0 ANSI (US), 1 ISO (European), 2 JIS
+  local info layout lang res total main top
+  info=$(ioreg -r -c AppleHIDKeyboardEventDriverV2 -w0 -l 2>/dev/null | awk '
+    function flush() { if (bi) { print std " " lang; done = 1 } bi = 0; std = ""; lang = "" }
+    /\+-o / { if (!done) flush() }
+    /"Built-In" = Yes/ { bi = 1 }
+    /"StandardType" = / { std = $NF }
+    /"KeyboardLanguage" = / { s = $0; sub(/.*"KeyboardLanguage" = "/, "", s); sub(/".*/, "", s); lang = s }
+    END { if (!done) flush() }')
+  case "${info%% *}" in
+    0) layout=ansi ;; 1) layout=iso ;;
+    *) NOT_TESTED+=("keyboard"); row na "Keyboard test" "Layout not supported"; return ;;
+  esac
+  if [ "${info#* }" = German ]; then lang=de; else lang=us; fi
+
+  printf '\n  %sKeyboard test%s: a window shows the keyboard. Press every key once; it turns\n' "$BLD" "$RST"
+  printf '  green when macOS registers it. Hold fn for F1 to F12. The window closes by\n'
+  printf '  itself when every key is green, or click Done.\n'
+  ask "Press Enter to start (s = skip)." "ys"
+  if [ "$ANSWER" = s ]; then NOT_TESTED+=("keyboard"); row na "Keyboard test" "Skipped"; return; fi
+  while :; do
+    res=$(osascript -l JavaScript -e "$KEYBOARD_JS" "$layout" "$lang" 2>/dev/null)
+    flush_tty
+    total=$(printf '%s\n' "$res" | awk '$1 == "TOTAL" { print $2 }')
+    if [ -z "$total" ]; then NOT_TESTED+=("keyboard"); row na "Keyboard test" "Could not open the test window"; return; fi
+    main=$(printf '%s\n' "$res" | sed -n 's/^MISSING_MAIN *//p')
+    top=$(printf '%s\n' "$res" | sed -n 's/^MISSING_TOP *//p')
+    [ -z "$main$top" ] && break
+    printf '  Not registered: %s\n' "$main${main:+${top:+  }}$top"
+    ask "Continue, or repeat the test? [c = continue / r = repeat]" "cr"
+    [ "$ANSWER" = r ] || break
+  done
+  if [ -z "$main$top" ]; then row ok "Keyboard test" "All $total keys registered"; return; fi
+  if [ -n "$main" ]; then
+    row bad "Keyboard test" "Not registered: $main" "Keys that never register need a keyboard repair"
+    deduct 15 "Keys not registered: $main"
+  else
+    row ok "Keyboard test" "All main keys registered"
+  fi
+  [ -n "$top" ] && row warn "Top row" "Not registered: $top" "macOS can claim F-keys for shortcuts (F11 shows the desktop): check them without fn"
+}
+
+test_camera() {
+  printf '\n  %sCamera test%s: shows the live camera image for up to 30 seconds. Check it is\n' "$BLD" "$RST"
+  printf '  sharp with natural colours, and that the green light next to the camera is on.\n'
+  ask "Press Enter to start (s = skip)." "ys"
+  if [ "$ANSWER" = s ]; then NOT_TESTED+=("camera"); row na "Camera test" "Skipped"; return; fi
+  media_access vide camera Camera || return
+  local res
+  while :; do
+    res=$(osascript -l JavaScript -e "$CAPTURE_JS" show 2>/dev/null)
+    flush_tty
+    if [ "$res" != ok ]; then NOT_TESTED+=("camera"); row na "Camera test" "Could not open the camera${res:+ ($res)}"; return; fi
+    ask "Sharp image, natural colours, green light on? [y / n / r = repeat]" "ynr"
+    [ "$ANSWER" = r ] || break
+  done
+  if [ "$ANSWER" = y ]; then row ok "Camera test" "Image and light OK"
+  else row bad "Camera test" "Image or light faulty"; deduct 10 "Camera failed the live image test"; fi
+}
+
 test_speakers() {
   printf '\n  %sSpeaker test%s: plays chimes on the left, then the right speaker, then a\n' "$BLD" "$RST"
   printf '  rising tone on both. Listen for silence, crackling, buzzing or rattling.\n'
-
-  local out
-  while :; do
-    out=$(default_output)
-    [ -z "$out" ] && out="1 the default output"
-    [ "${out%% *}" = 1 ] && break
-    printf '  %sSound is going to "%s", not the built-in speakers.%s\n' "$YEL" "${out#* }" "$RST"
-    ask "Disconnect headphones/AirPods, then press Enter (s = skip)." "ys"
-    if [ "$ANSWER" = s ]; then NOT_TESTED+=("speakers"); row na "Speaker test" "Skipped"; return; fi
-  done
-  printf '  Playing through: %s\n' "${out#* }"
-
-  VOL_OLD=$(osascript -e 'output volume of (get volume settings)' 2>/dev/null)
-  MUTED_OLD=$(osascript -e 'output muted of (get volume settings)' 2>/dev/null)
-  if [ "$MUTED_OLD" = true ] || { is_int "$VOL_OLD" && [ "$VOL_OLD" -lt 40 ]; }; then
-    is_int "$VOL_OLD" || VOL_OLD=50
-    osascript -e 'set volume output volume 60' -e 'set volume output muted false' >/dev/null 2>&1
-    VOL_CHANGED=1
-    trap 'restore_volume' EXIT
-    printf '  %sVolume raised to 60 %% for the test, restored afterwards.%s\n' "$DIM" "$RST"
-  fi
+  if ! require_builtin output speakers; then NOT_TESTED+=("speakers"); row na "Speaker test" "Skipped"; return; fi
+  raise_volume
 
   local side label
   for side in left right; do
@@ -648,25 +1046,73 @@ test_speakers() {
     else row bad "Speaker quality" "Crackling, buzzing or rattling"; deduct 10 "Speakers distort in the sweep test"; fi
     break
   done
+}
 
-  restore_volume
-  trap - EXIT
+test_microphone() {
+  printf '\n  %sMicrophone test%s: records 4 seconds while you talk, then plays it back.\n' "$BLD" "$RST"
+  if ! require_builtin input microphone; then NOT_TESTED+=("microphone"); row na "Microphone test" "Skipped"; return; fi
+  ask "Press Enter to start (s = skip)." "ys"
+  if [ "$ANSWER" = s ]; then NOT_TESTED+=("microphone"); row na "Microphone test" "Skipped"; return; fi
+  media_access soun microphone Microphone || return
+  raise_volume
+  raise_input
+  TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/mac-check.XXXXXX") || { NOT_TESTED+=("microphone"); row na "Microphone test" "No temp folder"; return; }
+
+  local res peak db
+  while :; do
+    printf '  %sRecording for 4 seconds: talk now...%s\n' "$BLD" "$RST"
+    res=$(osascript -l JavaScript -e "$AUDIO_JS" record "$TMP_DIR/mic.wav" 2>/dev/null)
+    case "$res" in
+      "ok "*) peak=${res#ok } ;;
+      *) NOT_TESTED+=("microphone"); row na "Microphone test" "Could not record"; return ;;
+    esac
+    printf '  Playing it back...\n'
+    osascript -l JavaScript -e "$AUDIO_JS" play "$TMP_DIR/mic.wav" >/dev/null 2>&1
+    ask "Heard yourself clearly? [y / n / r = record again]" "ynr"
+    [ "$ANSWER" = r ] || break
+  done
+  rm -f "$TMP_DIR/mic.wav"
+
+  # Peak level in dBFS: talking near the Mac gives about -25 to 0, a dead
+  # microphone stays at -60 or lower.
+  db=${peak#-}
+  local dead=0
+  if ! is_int "$db"; then
+    row na "Microphone level" "Not measured"
+  elif [ "$peak" != "$db" ] && [ "$db" -ge 60 ]; then
+    row bad "Microphone level" "No sound picked up (peak $peak dB)"
+    deduct 15 "Microphone picked up no sound"; dead=1
+  elif [ "$peak" != "$db" ] && [ "$db" -ge 35 ]; then
+    row warn "Microphone level" "Very quiet (peak $peak dB)" "Talk closer to the Mac and record again"
+  else
+    row ok "Microphone level" "Picked up sound (peak $peak dB)"
+  fi
+  if [ "$ANSWER" = y ]; then row ok "Microphone playback" "Clear"
+  else
+    row bad "Microphone playback" "Unclear or silent"
+    [ "$dead" = 1 ] || deduct 10 "Microphone recording unclear"
+  fi
 }
 
 run_tests() {
   section "HANDS-ON TESTS"
+  local all="display keyboard camera speakers microphone"
   if [ "$QUICK" = 1 ]; then
-    NOT_TESTED+=("display" "speakers"); row na "Display & speakers" "Skipped (--quick)"; return
+    NOT_TESTED+=($all); row na "Hands-on tests" "Skipped (--quick)"; return
   fi
   if ! have_tty; then
-    NOT_TESTED+=("display" "speakers"); row na "Display & speakers" "Skipped (no terminal to answer in)"; return
+    NOT_TESTED+=($all); row na "Hands-on tests" "Skipped (no terminal to answer in)"; return
   fi
-  ask "Run the display and speaker tests now (about 1 minute)? [Y/n]" "yn"
+  ask "Run the hands-on tests now: screen, keyboard, camera, speakers, microphone (about 3 minutes)? [Y/n]" "yn"
   if [ "$ANSWER" = n ]; then
-    NOT_TESTED+=("display" "speakers"); row na "Display & speakers" "Skipped"; return
+    NOT_TESTED+=($all); row na "Hands-on tests" "Skipped"; return
   fi
   test_display
+  test_keyboard
+  test_camera
   test_speakers
+  test_microphone
+  cleanup
 }
 
 # ---------- result ----------
@@ -731,21 +1177,25 @@ summary() {
   item() { n=$((n + 1)); printf '  %d. %s\n' "$n" "$1"; shift; for x in "$@"; do printf '     %s\n' "$x"; done; }
   tested display || item "Screen: full-screen white, black, red, green, blue. Look for dead" \
     "pixels, stains, coating damage and bright spots at the edges."
-  item "Keyboard: press every key in TextEdit, check backlight and Touch ID." \
-    "Trackpad: click in all corners, force click, two-finger scroll."
+  if tested keyboard; then
+    item "Keyboard backlight and Touch ID." \
+      "Trackpad: click in all corners, force click, two-finger scroll."
+  else
+    item "Keyboard: press every key in TextEdit, check backlight and Touch ID." \
+      "Trackpad: click in all corners, force click, two-finger scroll."
+  fi
   item "Ports: charge from every port, plug a USB stick into each one."
-  if tested speakers; then item "Microphone and camera (Photo Booth)."
-  else item "Speakers (play music), microphone and camera (Photo Booth)."; fi
+  local media=""
+  tested camera || media="camera"
+  tested microphone || media="${media:+$media and }microphone"
+  [ -n "$media" ] && item "$(printf '%s' "${media:0:1}" | tr '[:lower:]' '[:upper:]')${media:1}: record a short clip in Photo Booth and play it back."
+  tested speakers || item "Speakers: play music and listen to both sides for crackling."
   item "Wi-Fi: join your phone's hotspot. Bluetooth: pair your headphones."
-  item "Body: dents, bent lid, open screws, liquid marks. A trackpad that" \
-    "bulges or a lid that won't close flat means a swollen battery."
-  item "Deep test: Apple Diagnostics. Shut down, hold the power button until" \
-    "the startup options appear, then press Cmd-D."
   item "At handover: seller signs out of their Apple Account, re-run this" \
     "check (Activation Lock must say \"Disabled\"), then seller runs" \
     "System Settings > General > Transfer or Reset > Erase All Content" \
     "and Settings while you watch."
-  printf '\n%smac-check %s. Nothing was changed on this Mac or sent anywhere.%s\n\n' "$DIM" "$VERSION" "$RST"
+  printf '\n%smac-check %s. Nothing was installed or sent anywhere.%s\n\n' "$DIM" "$VERSION" "$RST"
 }
 
 main() {
@@ -769,7 +1219,10 @@ main() {
   fi
 
   setup_colors
-  SCORE=100; BLOCKERS=(); DEDUCTIONS=(); NOT_TESTED=(); OUTLOOK=""; BAT_PTS=0; VOL_CHANGED=0
+  SCORE=100; BLOCKERS=(); DEDUCTIONS=(); NOT_TESTED=(); OUTLOOK=""; BAT_PTS=0
+  VOL_OLD=""; VOL_CHANGED=0; IN_OLD=""; IN_CHANGED=0; TMP_DIR=""
+  # Put the volume back and delete the recording even on Ctrl-C
+  trap cleanup EXIT
 
   printf '\n%smac-check %s%s  used-Mac health check, %s\n' "$BLD" "$VERSION" "$RST" "$(date '+%Y-%m-%d %H:%M')"
   collect
