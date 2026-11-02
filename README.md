@@ -18,8 +18,7 @@ curl -sL https://raw.githubusercontent.com/Sybili/mac-health/main/mac-check.sh |
 > Open Terminal with `Cmd + Space`, type "Terminal", press Enter.
 
 The automatic checks take about 3 seconds. The hands-on tests (screen,
-keyboard, camera, speakers, microphone) take about 3 minutes. Skip them with
-`--quick`.
+camera, speakers, microphone) take about 2 minutes. Skip them with `--quick`.
 
 ## What it checks
 
@@ -34,17 +33,11 @@ keyboard, camera, speakers, microphone) take about 3 minutes. Skip them with
 | **Built-in hardware** | Internal display, keyboard/trackpad, camera, Wi-Fi, Bluetooth, speakers, microphone (does macOS detect them?) |
 | **Stability** | Kernel panics in the logs, thermal throttling |
 
-### Hands-on (you look, press and listen)
+### Hands-on (you look and listen)
 
 - **Display:** the screen turns white, black, red, green, blue and gray, full
   screen with no menu bar or Dock. Look for dead or stuck pixels, spots, stains
   and uneven backlight. Click or press any key for the next colour, Esc to stop.
-- **Keyboard:** a window shows the built-in keyboard in its real layout
-  (US ANSI or European ISO, with German labels on a German keyboard). Press
-  every key once; each one turns green when macOS registers it, including fn,
-  both Shift, Option and Command keys, Caps Lock and the arrows. Hold fn for
-  F1 to F12. The window closes by itself when every key is green, and the script
-  lists any key that never registered.
 - **Camera:** a window shows the live image from the built-in camera for up to
   30 seconds, so you can check sharpness and colours and that the green light
   turns on.
@@ -72,7 +65,7 @@ At the end it prints:
 - every **deduction**, so you can see why points were lost,
 - what was **not tested**,
 - a **rough battery outlook**: years until the battery hits 80 % at the wear rate so far,
-- a short **manual checklist** for what a script cannot test (trackpad, Touch ID, ports, Wi-Fi).
+- a short **manual checklist** for what a script cannot test (keyboard, trackpad, Touch ID, ports, Wi-Fi).
 
 ### Blockers
 
@@ -104,8 +97,6 @@ cost at most 35 points, because a battery can be replaced.
 | Wi-Fi / Bluetooth / camera not detected | -15 / -10 / -10 |
 | Speakers / microphone not detected | -5 each |
 | Display test: defects seen | -15 |
-| Keyboard test: a main key never registered | -15 |
-| Keyboard test: an F-key never registered | warning only (macOS can claim F-keys for shortcuts) |
 | Camera test: image or light faulty | -10 |
 | Speaker test: left or right speaker failed | -10 each |
 | Speaker test: crackling, buzzing or rattling | -10 |
@@ -119,7 +110,7 @@ cost at most 35 points, because a battery can be replaced.
 ## Recommended routine at the meetup
 
 1. Run the check on the seller's account, including the hands-on tests.
-2. Do the manual checks the script prints (trackpad, Touch ID, every port, Wi-Fi).
+2. Do the manual checks the script prints (every key, trackpad, Touch ID, every port, Wi-Fi).
 3. Seller signs out of their Apple Account, then you run the check again
    (`--quick` is enough). Activation Lock must say **Disabled**.
 4. Seller erases the Mac in front of you:
@@ -164,8 +155,6 @@ curl -sL https://sybili.github.io/mac-health | bash -s -- --no-color
 - It reads what macOS reports plus what you see and hear in the tests. It cannot
   find sticky or mushy keys, dents, liquid damage or a port that is loose but
   still detected.
-- macOS uses some F-keys for system shortcuts (F11 shows the desktop), so those
-  may not reach the keyboard test. They are reported as a warning, not a fault.
 - SSD wear (percentage used, data written) needs `smartctl`, which is rarely installed.
 - The battery outlook is a straight-line estimate from wear so far, so treat it as rough.
 - For a fuller guided test (trackpad, ports, lid sensor) with a PDF report,

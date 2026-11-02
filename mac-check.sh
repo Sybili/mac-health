@@ -5,7 +5,7 @@
 #
 # The automatic part only reads: nothing is installed or sent anywhere, and no
 # admin password is needed. The optional hands-on tests show full-screen
-# colours, a keyboard tester and the live camera image, play test tones and
+# colours and the live camera image, play test tones and
 # record a short clip that is deleted after playback. macOS asks once whether
 # Terminal may use the camera and microphone. A muted or very low volume is
 # raised for the tests and restored afterwards. Runs on the stock /bin/bash 3.2.
@@ -13,7 +13,7 @@
 # Everything lives inside main() so bash parses the whole file before running
 # anything: safe when the script is piped straight from curl.
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 
 usage() {
   cat <<'EOF'
@@ -24,9 +24,9 @@ Usage:
   curl -sL https://sybili.github.io/mac-health | bash -s -- --quick
   bash mac-check.sh [--quick] [--no-color] [--help] [--version]
 
-Reads hardware, battery, storage and lock state, runs screen, keyboard,
-camera, speaker and microphone tests with you, then prints a health score
-(0-100) and a buy / don't-buy verdict.
+Reads hardware, battery, storage and lock state, runs screen, camera,
+speaker and microphone tests with you, then prints a health score (0-100)
+and a buy / don't-buy verdict.
 
   --quick     skip the hands-on tests
   --no-color  plain output
@@ -500,155 +500,6 @@ function run() {
 }
 JS
 
-# Keyboard test: draws the built-in keyboard (ANSI or ISO, German or US
-# labels) and turns each key green when its key code arrives. Modifiers and
-# fn come in as flagsChanged events. Prints TOTAL, PRESSED, MISSING_MAIN and
-# MISSING_TOP lines when the window closes.
-IFS= read -r -d '' KEYBOARD_JS <<'JS'
-ObjC.import('Cocoa');
-function run(argv) {
-  var iso = argv[0] === 'iso', de = argv[1] === 'de';
-  var app = $.NSApplication.sharedApplication;
-  app.setActivationPolicy(0);
-
-  // [keyCode, US label, German label, width in key units, report name]
-  function k(code, us, gr, w, name) { return { code: code, label: de ? gr : us, w: w || 1, name: name || (de ? gr : us) }; }
-  function fkey(n, code) { var key = k(code, 'F' + n, 'F' + n); key.top = true; return key; }
-  var rows = [
-    [k(53, 'esc', 'esc', 1.5), fkey(1, 122), fkey(2, 120), fkey(3, 99), fkey(4, 118), fkey(5, 96), fkey(6, 97),
-     fkey(7, 98), fkey(8, 100), fkey(9, 101), fkey(10, 109), fkey(11, 103), fkey(12, 111)],
-    [iso ? k(10, '§', '^') : k(50, '`', '^'), k(18, '1', '1'), k(19, '2', '2'), k(20, '3', '3'), k(21, '4', '4'),
-     k(23, '5', '5'), k(22, '6', '6'), k(26, '7', '7'), k(28, '8', '8'), k(25, '9', '9'), k(29, '0', '0'),
-     k(27, '-', 'ß'), k(24, '=', '´'), k(51, '⌫', '⌫', 1.5, 'delete')],
-    [k(48, '⇥', '⇥', 1.5, 'tab'), k(12, 'Q', 'Q'), k(13, 'W', 'W'), k(14, 'E', 'E'), k(15, 'R', 'R'), k(17, 'T', 'T'),
-     k(16, 'Y', 'Z'), k(32, 'U', 'U'), k(34, 'I', 'I'), k(31, 'O', 'O'), k(35, 'P', 'P'), k(33, '[', 'Ü'), k(30, ']', '+')]
-      .concat(iso ? [] : [k(42, '\\', '#')]),
-    [k(57, '⇪', '⇪', iso ? 1.6 : 1.75, 'caps lock'), k(0, 'A', 'A'), k(1, 'S', 'S'), k(2, 'D', 'D'), k(3, 'F', 'F'),
-     k(5, 'G', 'G'), k(4, 'H', 'H'), k(38, 'J', 'J'), k(40, 'K', 'K'), k(37, 'L', 'L'), k(41, ';', 'Ö'), k(39, "'", 'Ä')]
-      .concat(iso ? [k(42, '\\', '#')] : [k(36, '↩', '↩', 1.75, 'return')]),
-    (iso ? [k(56, '⇧', '⇧', 1.25, 'left shift'), k(50, '`', '<')] : [k(56, '⇧', '⇧', 2.25, 'left shift')])
-      .concat([k(6, 'Z', 'Y'), k(7, 'X', 'X'), k(8, 'C', 'C'), k(9, 'V', 'V'), k(11, 'B', 'B'), k(45, 'N', 'N'),
-               k(46, 'M', 'M'), k(43, ',', ','), k(47, '.', '.'), k(44, '/', '-'), k(60, '⇧', '⇧', 2.25, 'right shift')]),
-    [k(63, 'fn', 'fn', 1), k(59, '⌃', '⌃', 1, 'control'), k(58, '⌥', '⌥', 1, 'left option'), k(55, '⌘', '⌘', 1.25, 'left command'),
-     k(49, '', '', 5, 'space'), k(54, '⌘', '⌘', 1.25, 'right command'), k(61, '⌥', '⌥', 1, 'right option'),
-     k(123, '←', '←', 1, 'left'), 'updown', k(124, '→', '→', 1, 'right')]
-  ];
-
-  var U = 48, G = 5, M = 24, HEAD = 78, FOOT = 56, TOPROW = 0.65 * U;
-  var W = 14.5 * U + 2 * M, H = HEAD + TOPROW + 5 * U + FOOT;
-  var GRAY = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.27, 0.27, 0.29, 1);
-  var GREEN = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.18, 0.62, 0.30, 1);
-  var keys = {}, total = 0, pressed = 0, finished = false, win, content, counter;
-
-  // align: 0 left, 1 centre (AppKit values on Apple silicon)
-  function label(text, x, y, w, h, size, color, align) {
-    var tf = $.NSTextField.wrappingLabelWithString(text);
-    tf.setFrame($.NSMakeRect(x, y, w, h));
-    tf.setFont($.NSFont.systemFontOfSize(size));
-    tf.setTextColor(color || $.NSColor.whiteColor);
-    tf.setAlignment(align === undefined ? 1 : align);
-    return tf;
-  }
-  // x, w in key units; top in points from the top edge of the key area
-  function addKey(key, x, top, w, h) {
-    var box = $.NSBox.alloc.initWithFrame($.NSMakeRect(M + x * U + G / 2, H - HEAD - top - h + G / 2, w * U - G, h - G));
-    box.setBoxType(4); box.setBorderWidth(0); box.setCornerRadius(6); box.setTitlePosition(0);
-    box.setContentViewMargins($.NSMakeSize(0, 0)); box.setFillColor(GRAY);
-    box.contentView.addSubview(label(key.label, 0, (h - G - 17) / 2, w * U - G, 17, 13));
-    content.addSubview(box);
-    key.box = box; keys[key.code] = key; total++;
-  }
-
-  function finish() {
-    if (finished) return;
-    finished = true;
-    var main = [], top = [];
-    Object.keys(keys).forEach(function (c) {
-      var key = keys[c];
-      if (!key.done) (key.top ? top : main).push(key.name);
-    });
-    var text = 'TOTAL ' + total + '\nPRESSED ' + pressed + '\nMISSING_MAIN ' + main.join('  ') + '\nMISSING_TOP ' + top.join('  ') + '\n';
-    $.NSFileHandle.fileHandleWithStandardOutput.writeData($(text).dataUsingEncoding($.NSUTF8StringEncoding));
-    app.terminate(null);
-  }
-  function mark(code) {
-    var key = keys[code];
-    if (!key || key.done) return;
-    key.done = true; pressed++;
-    key.box.setFillColor(GREEN);
-    counter.setStringValue(pressed + ' of ' + total + ' keys registered');
-    if (pressed === total) {
-      counter.setStringValue('All ' + total + ' keys registered');
-      $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(0.8, helper, 'finish:', null, false);
-    }
-  }
-
-  ObjC.registerSubclass({
-    name: 'MCKeyPanel', superclass: 'NSPanel',
-    methods: {
-      'canBecomeKeyWindow': { types: ['bool', []], implementation: function () { return true; } },
-      'acceptsFirstMouse:': { types: ['bool', ['id']], implementation: function () { return true; } },
-      'keyDown:': { types: ['void', ['id']], implementation: function (e) { mark(e.keyCode); } },
-      'flagsChanged:': { types: ['void', ['id']], implementation: function (e) { mark(e.keyCode); } },
-      'performKeyEquivalent:': { types: ['bool', ['id']], implementation: function (e) { if (e.type == 10) mark(e.keyCode); return true; } },
-      'cancelOperation:': { types: ['void', ['id']], implementation: function () {} }
-    }
-  });
-  ObjC.registerSubclass({
-    name: 'MCKeyHelper', superclass: 'NSObject',
-    methods: { 'finish:': { types: ['void', ['id']], implementation: function () { finish(); } } }
-  });
-  var helper = $.MCKeyHelper.alloc.init;
-
-  var screen = $.NSScreen.mainScreen.visibleFrame;
-  win = $.MCKeyPanel.alloc.initWithContentRectStyleMaskBackingDefer(
-    $.NSMakeRect(screen.origin.x + (screen.size.width - W) / 2, screen.origin.y + (screen.size.height - H) / 2, W, H), 128, 2, false);
-  win.setLevel(1000); win.setCollectionBehavior(1 | 256); win.setHidesOnDeactivate(false);
-  win.setOpaque(false); win.setHasShadow(true);
-  win.setBackgroundColor($.NSColor.clearColor);
-  content = win.contentView;
-  var bg = $.NSBox.alloc.initWithFrame(content.bounds);
-  bg.setBoxType(4); bg.setBorderWidth(0); bg.setCornerRadius(14); bg.setTitlePosition(0);
-  bg.setFillColor($.NSColor.colorWithSRGBRedGreenBlueAlpha(0.11, 0.11, 0.12, 1));
-  content.addSubview(bg);
-
-  var dim = $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.7, 0.7, 0.72, 1);
-  content.addSubview(label('Keyboard test', M, H - 38, W - 2 * M, 22, 17, null, 0));
-  content.addSubview(label('Press every key once. Keys turn green when macOS registers them. Hold fn for F1 to F12. ' +
-    'If nothing lights up, click this window once.', M, H - 68, W - 2 * M, 30, 12, dim, 0));
-
-  var top = 0;
-  rows.forEach(function (row, r) {
-    var h = r === 0 ? TOPROW : U, x = 0;
-    row.forEach(function (key) {
-      if (key === 'updown') {
-        addKey(k(126, '↑', '↑', 1, 'up'), x, top, 1, h / 2 + G / 2);
-        addKey(k(125, '↓', '↓', 1, 'down'), x, top + h / 2 - G / 2, 1, h / 2 + G / 2);
-        x += 1; return;
-      }
-      addKey(key, x, top, key.w, h);
-      x += key.w;
-    });
-    // ISO Return spans the second and third letter rows at the right edge
-    if (iso && r === 2) addKey(k(36, '↩', '↩', 0.9, 'return'), 13.6, top, 0.9, 2 * U);
-    top += h;
-  });
-
-  counter = label('0 of ' + total + ' keys registered', M, 18, 400, 20, 13, dim, 0);
-  content.addSubview(counter);
-  var btn = $.NSButton.buttonWithTitleTargetAction('Done', helper, 'finish:');
-  btn.setFrame($.NSMakeRect(W - M - 90, 12, 90, 32));
-  btn.setRefusesFirstResponder(true);
-  content.addSubview(btn);
-
-  win.makeKeyAndOrderFront(null);
-  app.activateIgnoringOtherApps(true);
-  // Never leave the window up forever
-  $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(300, helper, 'finish:', null, false);
-  app.run;
-}
-JS
-
 # Camera access and live preview. "status <vide|soun>" and "auth <vide|soun>"
 # print the permission state (3 = allowed); "show" opens the live image.
 IFS= read -r -d '' CAPTURE_JS <<'JS'
@@ -952,50 +803,6 @@ test_display() {
   fi
 }
 
-test_keyboard() {
-  if [ "$LAPTOP" != 1 ]; then NOT_TESTED+=("keyboard"); row na "Keyboard test" "No built-in keyboard"; return; fi
-  # Physical layout of the built-in keyboard: 0 ANSI (US), 1 ISO (European), 2 JIS
-  local info layout lang res total main top
-  info=$(ioreg -r -c AppleHIDKeyboardEventDriverV2 -w0 -l 2>/dev/null | awk '
-    function flush() { if (bi) { print std " " lang; done = 1 } bi = 0; std = ""; lang = "" }
-    /\+-o / { if (!done) flush() }
-    /"Built-In" = Yes/ { bi = 1 }
-    /"StandardType" = / { std = $NF }
-    /"KeyboardLanguage" = / { s = $0; sub(/.*"KeyboardLanguage" = "/, "", s); sub(/".*/, "", s); lang = s }
-    END { if (!done) flush() }')
-  case "${info%% *}" in
-    0) layout=ansi ;; 1) layout=iso ;;
-    *) NOT_TESTED+=("keyboard"); row na "Keyboard test" "Layout not supported"; return ;;
-  esac
-  if [ "${info#* }" = German ]; then lang=de; else lang=us; fi
-
-  printf '\n  %sKeyboard test%s: a window shows the keyboard. Press every key once; it turns\n' "$BLD" "$RST"
-  printf '  green when macOS registers it. Hold fn for F1 to F12. The window closes by\n'
-  printf '  itself when every key is green, or click Done.\n'
-  ask "Press Enter to start (s = skip)." "ys"
-  if [ "$ANSWER" = s ]; then NOT_TESTED+=("keyboard"); row na "Keyboard test" "Skipped"; return; fi
-  while :; do
-    res=$(osascript -l JavaScript -e "$KEYBOARD_JS" "$layout" "$lang" 2>/dev/null)
-    flush_tty
-    total=$(printf '%s\n' "$res" | awk '$1 == "TOTAL" { print $2 }')
-    if [ -z "$total" ]; then NOT_TESTED+=("keyboard"); row na "Keyboard test" "Could not open the test window"; return; fi
-    main=$(printf '%s\n' "$res" | sed -n 's/^MISSING_MAIN *//p')
-    top=$(printf '%s\n' "$res" | sed -n 's/^MISSING_TOP *//p')
-    [ -z "$main$top" ] && break
-    printf '  Not registered: %s\n' "$main${main:+${top:+  }}$top"
-    ask "Continue, or repeat the test? [c = continue / r = repeat]" "cr"
-    [ "$ANSWER" = r ] || break
-  done
-  if [ -z "$main$top" ]; then row ok "Keyboard test" "All $total keys registered"; return; fi
-  if [ -n "$main" ]; then
-    row bad "Keyboard test" "Not registered: $main" "Keys that never register need a keyboard repair"
-    deduct 15 "Keys not registered: $main"
-  else
-    row ok "Keyboard test" "All main keys registered"
-  fi
-  [ -n "$top" ] && row warn "Top row" "Not registered: $top" "macOS can claim F-keys for shortcuts (F11 shows the desktop): check them without fn"
-}
-
 test_camera() {
   printf '\n  %sCamera test%s: shows the live camera image for up to 30 seconds. Check it is\n' "$BLD" "$RST"
   printf '  sharp with natural colours, and that the green light next to the camera is on.\n'
@@ -1096,19 +903,18 @@ test_microphone() {
 
 run_tests() {
   section "HANDS-ON TESTS"
-  local all="display keyboard camera speakers microphone"
+  local all="display camera speakers microphone"
   if [ "$QUICK" = 1 ]; then
     NOT_TESTED+=($all); row na "Hands-on tests" "Skipped (--quick)"; return
   fi
   if ! have_tty; then
     NOT_TESTED+=($all); row na "Hands-on tests" "Skipped (no terminal to answer in)"; return
   fi
-  ask "Run the hands-on tests now: screen, keyboard, camera, speakers, microphone (about 3 minutes)? [Y/n]" "yn"
+  ask "Run the hands-on tests now: screen, camera, speakers, microphone (about 2 minutes)? [Y/n]" "yn"
   if [ "$ANSWER" = n ]; then
     NOT_TESTED+=($all); row na "Hands-on tests" "Skipped"; return
   fi
   test_display
-  test_keyboard
   test_camera
   test_speakers
   test_microphone
@@ -1177,13 +983,8 @@ summary() {
   item() { n=$((n + 1)); printf '  %d. %s\n' "$n" "$1"; shift; for x in "$@"; do printf '     %s\n' "$x"; done; }
   tested display || item "Screen: full-screen white, black, red, green, blue. Look for dead" \
     "pixels, stains, coating damage and bright spots at the edges."
-  if tested keyboard; then
-    item "Keyboard backlight and Touch ID." \
-      "Trackpad: click in all corners, force click, two-finger scroll."
-  else
-    item "Keyboard: press every key in TextEdit, check backlight and Touch ID." \
-      "Trackpad: click in all corners, force click, two-finger scroll."
-  fi
+  item "Keyboard: press every key in TextEdit, check backlight and Touch ID." \
+    "Trackpad: click in all corners, force click, two-finger scroll."
   item "Ports: charge from every port, plug a USB stick into each one."
   local media=""
   tested camera || media="camera"
