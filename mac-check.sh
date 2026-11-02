@@ -1,28 +1,32 @@
 #!/bin/bash
-# mac-check: quick, read-only health check for a used Mac before you buy it.
+# mac-check: quick health check for a used Apple silicon Mac before you buy it.
 #
 #   curl -sL https://sybili.github.io/mac-health | bash
 #
-# Nothing is installed, changed or sent anywhere, and no admin password is
-# needed. Runs on the stock /bin/bash 3.2, so it works on any macOS from 10.15.
+# The automatic part only reads: nothing is installed, changed or sent
+# anywhere, and no admin password is needed. The optional hands-on tests show
+# full-screen colours and play test tones; if the volume is very low it is
+# raised for the test and restored afterwards. Runs on the stock /bin/bash 3.2.
 #
 # Everything lives inside main() so bash parses the whole file before running
 # anything: safe when the script is piped straight from curl.
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 usage() {
   cat <<'EOF'
-mac-check: quick, read-only health check for a used Mac.
+mac-check: quick health check for a used Apple silicon Mac.
 
 Usage:
   curl -sL https://sybili.github.io/mac-health | bash
-  curl -sL https://sybili.github.io/mac-health | bash -s -- --no-color
-  bash mac-check.sh [--no-color] [--help] [--version]
+  curl -sL https://sybili.github.io/mac-health | bash -s -- --quick
+  bash mac-check.sh [--quick] [--no-color] [--help] [--version]
 
-Reads hardware, battery, storage and lock state, then prints a health score
-(0-100) and a buy / don't-buy verdict. No admin password, no network, no
-changes to the Mac.
+Reads hardware, battery, storage and lock state, runs a display and speaker
+test with you, then prints a health score (0-100) and a buy / don't-buy verdict.
+
+  --quick     skip the hands-on display and speaker tests
+  --no-color  plain output
 EOF
 }
 
@@ -55,6 +59,7 @@ row() {
 }
 
 deduct()  { SCORE=$((SCORE - $1)); DEDUCTIONS+=("$2 (-$1)"); }
+blocker() { BLOCKERS+=("$1"); }
 # A worn battery is a replaceable part, so all battery findings together cost
 # at most 35 points instead of stacking up and burying a healthy machine.
 bat_deduct() {
@@ -63,8 +68,6 @@ bat_deduct() {
   [ "$pts" -gt 0 ] || return 0
   BAT_PTS=$((BAT_PTS + pts)); deduct "$pts" "$2"
 }
-blocker() { BLOCKERS+=("$1"); }
-hint()    { HINTS+=("$1"); }
 
 # ---------- parsing helpers ----------
 
@@ -92,22 +95,6 @@ iv() {
 
 is_int() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
-# Release year for Intel MacBooks (Apple silicon reports it in product-name).
-intel_year() {
-  case "$1" in
-    MacBookAir6,*) echo 2013 ;;   MacBookAir7,*) echo 2015 ;;
-    MacBookAir8,1) echo 2018 ;;   MacBookAir8,2) echo 2019 ;;
-    MacBookAir9,1) echo 2020 ;;
-    MacBookPro11,1|MacBookPro11,2|MacBookPro11,3) echo 2013 ;;
-    MacBookPro11,4|MacBookPro11,5|MacBookPro12,1) echo 2015 ;;
-    MacBookPro13,*) echo 2016 ;;  MacBookPro14,*) echo 2017 ;;
-    MacBookPro15,1|MacBookPro15,2) echo 2018 ;;
-    MacBookPro15,3|MacBookPro15,4|MacBookPro16,1|MacBookPro16,4) echo 2019 ;;
-    MacBookPro16,2|MacBookPro16,3) echo 2020 ;;
-    MacBook8,1) echo 2015 ;; MacBook9,1) echo 2016 ;; MacBook10,1) echo 2017 ;;
-  esac
-}
-
 # ---------- checks ----------
 
 collect() {
@@ -126,24 +113,16 @@ collect() {
   MACHINE=$(jv "$HW" machine_name)
   PRODUCT=$(ioreg -rc IOPlatformDevice -k product-name -w0 2>/dev/null \
     | awk -F'<"|">' '/"product-name"/ { print $2; exit }')
-  # Intel Macs: name cached by "About This Mac", if it was ever opened
-  [ -z "$PRODUCT" ] && PRODUCT=$(defaults read com.apple.SystemProfiler 'CPU Names' 2>/dev/null \
-    | awk -F' = ' '/ = / { gsub(/[";]/, "", $2); print $2; exit }')
   [ -z "$PRODUCT" ] && PRODUCT="$MACHINE ($MODEL_ID)"
   case "$MACHINE" in *MacBook*) LAPTOP=1 ;; *) LAPTOP=0 ;; esac
-  if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then ARM=1; else ARM=0; fi
-
   YEAR=$(printf '%s' "$PRODUCT" | grep -oE '20[0-9]{2}' | tail -1)
-  [ -z "$YEAR" ] && YEAR=$(intel_year "$MODEL_ID")
   NOW_YEAR=$(date +%Y)
 }
 
 check_identity() {
   section "MACHINE"
-  local chip ram serial os build disk_gb setup age=""
-  chip=$(jv "$HW" chip_type)
-  [ -z "$chip" ] && chip=$(sysctl -n machdep.cpu.brand_string 2>/dev/null)
-  ram=$(jv "$HW" physical_memory)
+  local serial os build setup age=""
+  RAM=$(jv "$HW" physical_memory)
   serial=$(jv "$HW" serial_number)
   os=$(sw_vers -productVersion 2>/dev/null); build=$(sw_vers -buildVersion 2>/dev/null)
   DISK_GB=$(printf '%s\n' "$DISK" | awk -F'[(]' '/Disk Size:/ { split($2, a, " "); printf "%d", a[1] / 1e9 + 0.5; exit }')
@@ -152,33 +131,24 @@ check_identity() {
 
   row info "Model" "$PRODUCT"
   row info "Identifier" "$MODEL_ID$age"
-  row info "Chip / CPU" "$chip"
-  row info "Memory" "$ram"
+  row info "Chip" "$(jv "$HW" chip_type)"
+  row info "Memory" "$RAM"
   [ -n "$DISK_GB" ] && row info "Storage" "$DISK_GB GB"
   row info "Serial number" "$serial" "Compare with the box, invoice and bottom case; check at checkcoverage.apple.com"
   row info "macOS" "$os ($build)"
   [ -n "$setup" ] && row info "macOS set up on" "$setup" "A recent date means the Mac was recently erased"
-
-  RAM="$ram"
-  if [ "$ARM" = 0 ]; then
-    row warn "Architecture" "Intel" "macOS 26 Tahoe is the last macOS for Intel Macs; security updates end in a few years"
-    hint "Intel Mac: no more major macOS updates after Tahoe, price it accordingly"
-  else
-    row ok "Architecture" "Apple silicon"
-  fi
 }
 
 check_locks() {
   section "LOCKS & OWNERSHIP"
 
-  # Activation Lock (Apple silicon and T2 Macs report it here)
   local act; act=$(jv "$HW" activation_lock_status)
   case "$act" in
     *disabled*) row ok "Activation Lock" "Disabled" ;;
     *enabled*)
       row stop "Activation Lock" "ENABLED" "Seller must sign out of their Apple Account, then re-run this check"
       blocker "Activation Lock is ON: the Mac is locked to the seller's Apple Account" ;;
-    *) row na "Activation Lock" "Not reported (Mac without T2/Apple chip)" "Make sure Find My Mac is turned off" ;;
+    *) row na "Activation Lock" "Unknown" "Check that Find My Mac is turned off" ;;
   esac
 
   # Apple Account / Find My for the logged-in user (never print the address)
@@ -238,21 +208,6 @@ check_locks() {
     row ok "Config profiles" "None"
   fi
 
-  # Firmware password (Intel only, needs root to read)
-  if [ "$ARM" = 0 ]; then
-    if [ "$(id -u)" = 0 ] && command -v firmwarepasswd >/dev/null; then
-      if firmwarepasswd -check 2>/dev/null | grep -q 'Enabled: Yes'; then
-        row stop "Firmware password" "SET" "Without it you cannot reinstall macOS"
-        blocker "Firmware password is set"
-      else
-        row ok "Firmware password" "Not set"
-      fi
-    else
-      row na "Firmware password" "Not checked (needs admin)" "Boot to Recovery: a padlock icon means one is set"
-    fi
-  fi
-
-  # System Integrity Protection
   local sip; sip=$(csrutil status 2>/dev/null)
   case "$sip" in
     *"status: enabled."*) row ok "System Integrity" "SIP enabled" ;;
@@ -300,7 +255,7 @@ check_battery() {
     "")          row na "Condition" "Not reported" ;;
     *service*|*poor*|*replace\ now*|*check*)
       row bad "Condition" "$cond" "Battery needs replacing"
-      bat_deduct 25 "Battery condition: $cond"; BAT_REPLACE=1 ;;
+      bat_deduct 25 "Battery condition: $cond" ;;
     *) row warn "Condition" "$cond"; bat_deduct 10 "Battery condition: $cond" ;;
   esac
 
@@ -312,7 +267,7 @@ check_battery() {
     elif [ "$cap" -ge 80 ]; then row warn "Max capacity" "$cap %$mah" "Getting close to the 80 % replacement point"
                                  bat_deduct 12 "Battery at $cap % capacity"
     else row bad "Max capacity" "$cap %$mah" "Below 80 %: replacement due"
-         bat_deduct 25 "Battery at $cap % capacity"; BAT_REPLACE=1
+         bat_deduct 25 "Battery at $cap % capacity"
     fi
   else
     row na "Max capacity" "Not reported"
@@ -325,7 +280,7 @@ check_battery() {
     elif [ "$pct" -lt 60 ];  then row ok   "Cycle count" "$cycles of $rated rated"; bat_deduct 3 "$cycles battery cycles"
     elif [ "$pct" -lt 80 ];  then row warn "Cycle count" "$cycles of $rated rated"; bat_deduct 8 "$cycles battery cycles"
     elif [ "$pct" -le 100 ]; then row warn "Cycle count" "$cycles of $rated rated" "Near end of rated life"; bat_deduct 15 "$cycles battery cycles"
-    else row bad "Cycle count" "$cycles of $rated rated" "Past rated life"; bat_deduct 20 "$cycles battery cycles"; BAT_REPLACE=1
+    else row bad "Cycle count" "$cycles of $rated rated" "Past rated life"; bat_deduct 20 "$cycles battery cycles"
     fi
   fi
 
@@ -346,7 +301,7 @@ check_battery() {
 
   if [ -n "$pf" ] && [ "$pf" != 0 ]; then
     row bad "Failure flag" "Permanent failure reported ($pf)"
-    bat_deduct 30 "Battery reports a permanent failure"; BAT_REPLACE=1
+    bat_deduct 30 "Battery reports a permanent failure"
   fi
 
   if is_int "$temp"; then
@@ -370,7 +325,6 @@ check_battery() {
       OUTLOOK="Battery reaches 80 % in ~$((left10 / 10)).$((left10 % 10)) years at the current wear rate (based on $src)"
     fi
   fi
-  BAT_CAP="$cap"
 }
 
 check_storage() {
@@ -382,7 +336,7 @@ check_storage() {
   row info "Drive" "$name${DISK_GB:+, $DISK_GB GB}"
   case "$smart" in
     Verified) row ok "SMART status" "Verified" ;;
-    *Fail*)   row bad "SMART status" "$smart" "The SSD is failing and is soldered on most Macs"
+    *Fail*)   row bad "SMART status" "$smart" "The SSD is failing and is soldered to the logic board"
               deduct 40 "SSD SMART status: $smart"; blocker "SSD reports SMART failure" ;;
     *)        row na "SMART status" "${smart:-Not reported}" ;;
   esac
@@ -489,7 +443,235 @@ check_stability() {
   fi
 }
 
+# ---------- hands-on tests ----------
+
+# Full-screen colour test on every connected screen. A borderless,
+# non-activating panel gets key presses even though osascript was started
+# from the Terminal. Click or any key: next colour. Esc: stop.
+DISPLAY_JS=$(cat <<'JS'
+ObjC.import('Cocoa');
+function run() {
+  var app = $.NSApplication.sharedApplication;
+  app.setActivationPolicy(0);
+  var colors = [[1, 1, 1], [0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1], [0.5, 0.5, 0.5]];
+  var idx = 0, wins = [];
+  function paint() {
+    var c = colors[idx], col = $.NSColor.colorWithSRGBRedGreenBlueAlpha(c[0], c[1], c[2], 1);
+    wins.forEach(function (w) { w.setBackgroundColor(col); });
+  }
+  function next() { if (++idx >= colors.length) done(); else paint(); }
+  function done() { $.NSCursor.unhide; app.terminate(null); }
+  ObjC.registerSubclass({
+    name: 'MCColorPanel', superclass: 'NSPanel',
+    methods: {
+      'canBecomeKeyWindow': { types: ['bool', []], implementation: function () { return true; } },
+      'acceptsFirstMouse:': { types: ['bool', ['id']], implementation: function () { return true; } },
+      'keyDown:': { types: ['void', ['id']], implementation: function (e) { if (e.keyCode == 53) done(); else next(); } },
+      'mouseDown:': { types: ['void', ['id']], implementation: function () { next(); } }
+    }
+  });
+  ObjC.registerSubclass({
+    name: 'MCTimeout', superclass: 'NSObject',
+    methods: { 'fire:': { types: ['void', ['id']], implementation: function () { done(); } } }
+  });
+  var screens = $.NSScreen.screens;
+  for (var i = 0; i < screens.count; i++) {
+    var w = $.MCColorPanel.alloc.initWithContentRectStyleMaskBackingDefer(screens.objectAtIndex(i).frame, 128, 2, false);
+    w.setLevel(1000);                  // above menu bar and Dock
+    w.setCollectionBehavior(1 | 256);  // all Spaces, also over full-screen apps
+    w.setHidesOnDeactivate(false);
+    wins.push(w);
+  }
+  paint();
+  wins.forEach(function (w, n) { if (n === 0) w.makeKeyAndOrderFront(null); else w.orderFrontRegardless; });
+  app.activateIgnoringOtherApps(true);
+  $.NSCursor.hide;
+  // Never leave the screen covered: give up after 5 minutes
+  $.NSTimer.scheduledTimerWithTimeIntervalTargetSelectorUserInfoRepeats(300, $.MCTimeout.alloc.init, 'fire:', null, false);
+  app.run;
+}
+JS
+)
+
+# Test tones, generated in memory as a WAV and played with AVAudioPlayer.
+# "left"/"right": three chimes panned fully to one side. "sweep": a rising
+# tone from 60 Hz to 10 kHz on both sides, which makes rattles and crackling
+# easy to hear. Prints "ok" when the sound was played.
+AUDIO_JS=$(cat <<'JS'
+ObjC.import('AVFoundation');
+function wav(seconds, fn) {
+  var rate = 22050, n = Math.floor(seconds * rate), len = 44 + n * 2, b = new Array(len), i;
+  function str(o, s) { for (var k = 0; k < s.length; k++) b[o + k] = s.charCodeAt(k); }
+  function u16(o, v) { b[o] = v & 255; b[o + 1] = (v >> 8) & 255; }
+  function u32(o, v) { u16(o, v & 65535); u16(o + 2, (v >>> 16) & 65535); }
+  str(0, 'RIFF'); u32(4, len - 8); str(8, 'WAVEfmt '); u32(16, 16); u16(20, 1); u16(22, 1);
+  u32(24, rate); u32(28, rate * 2); u16(32, 2); u16(34, 16); str(36, 'data'); u32(40, n * 2);
+  for (i = 0; i < n; i++) {
+    var v = Math.round(Math.max(-1, Math.min(1, fn(i / rate))) * 32767);
+    u16(44 + i * 2, v < 0 ? v + 65536 : v);
+  }
+  var abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', out = [];
+  for (i = 0; i < len; i += 3) {
+    var x = (b[i] << 16) | ((b[i + 1] || 0) << 8) | (b[i + 2] || 0);
+    out.push(abc[x >> 18 & 63] + abc[x >> 12 & 63] + (i + 1 < len ? abc[x >> 6 & 63] : '=') + (i + 2 < len ? abc[x & 63] : '='));
+  }
+  return out.join('');
+}
+function run(argv) {
+  var mode = argv[0], T, fn, pan = 0;
+  if (mode === 'sweep') {
+    T = 4;
+    var f0 = 60, f1 = 10000, k = Math.log(f1 / f0);
+    fn = function (t) {
+      return 0.5 * Math.min(1, t / 0.05, (T - t) / 0.05) * Math.sin(2 * Math.PI * f0 * T / k * (Math.exp(t / T * k) - 1));
+    };
+  } else {
+    T = 1.5; pan = mode === 'left' ? -1 : 1;
+    fn = function (t) {
+      var p = t % 0.5; if (p > 0.35) return 0;
+      var env = Math.min(1, p / 0.01) * Math.exp(-p * 8);
+      return 0.6 * env * (Math.sin(2 * Math.PI * 660 * t) + 0.4 * Math.sin(2 * Math.PI * 1320 * t));
+    };
+  }
+  var data = $.NSData.alloc.initWithBase64EncodedStringOptions(wav(T, fn), 0);
+  var player = $.AVAudioPlayer.alloc.initWithDataError(data, null);
+  if (!player || player.isNil()) return 'fail';
+  player.setPan(pan);
+  if (!player.play) return 'fail';
+  delay(T + 0.2);
+  return 'ok';
+}
+JS
+)
+
+have_tty() { (exec </dev/tty) 2>/dev/null; }
+
+# ask <question> <letters>: reads an answer from the terminal (stdin is the
+# script itself when piped from curl). Enter picks the first letter. Stray
+# keys pressed during the colour test are ignored: only the last letter counts.
+ask() {
+  local ans
+  while :; do
+    printf '  %s%s%s ' "$BLD" "$1" "$RST"
+    IFS= read -r ans </dev/tty || { ANSWER=${2:0:1}; return; }
+    ans=$(printf '%s' "$ans" | tr -cd '[:alpha:]' | tr '[:upper:]' '[:lower:]')
+    ans=${ans: -1}
+    [ -z "$ans" ] && ans=${2:0:1}
+    case "$2" in *"$ans"*) ANSWER=$ans; return ;; esac
+  done
+}
+
+# Prints "<1 if built-in> <device name>" for the current default audio output.
+default_output() {
+  system_profiler -json SPAudioDataType 2>/dev/null | awk -F'" : "' '
+    function flush() { if (def) { print (bi ? 1 : 0) " " name; found = 1 } }
+    /"_name"/ { flush(); name = $2; sub(/",?$/, "", name); def = 0; bi = 0 }
+    /"coreaudio_default_audio_output_device" : "spaudio_yes"/ { def = 1 }
+    /coreaudio_device_type_builtin/ { bi = 1 }
+    END { if (!found) flush() }'
+}
+
+restore_volume() {
+  [ "$VOL_CHANGED" = 1 ] || return 0
+  osascript -e "set volume output volume $VOL_OLD" >/dev/null 2>&1
+  [ "$MUTED_OLD" = true ] && osascript -e 'set volume output muted true' >/dev/null 2>&1
+  VOL_CHANGED=0
+}
+
+test_display() {
+  printf '\n  %sDisplay test%s: the screen turns white, black, red, green, blue and gray.\n' "$BLD" "$RST"
+  printf '  Look for dots that stay black or bright, spots, stains, and uneven light\n'
+  printf '  at the edges. Click or press any key for the next colour, Esc to stop.\n'
+  while :; do
+    ask "Press Enter to start (s = skip)." "ys"
+    if [ "$ANSWER" = s ]; then NOT_TESTED+=("display"); row na "Display test" "Skipped"; return; fi
+    osascript -l JavaScript -e "$DISPLAY_JS" >/dev/null 2>&1
+    ask "Dead pixels, spots or stains seen? [n = all clean / y = problems / r = repeat]" "nyr"
+    [ "$ANSWER" = r ] || break
+  done
+  if [ "$ANSWER" = n ]; then
+    row ok "Display test" "No defects seen"
+  else
+    row bad "Display test" "Defects seen" "Look again closely: one dead pixel is a flaw, stains or lines are a repair"
+    deduct 15 "Display defects seen in the colour test"
+  fi
+}
+
+test_speakers() {
+  printf '\n  %sSpeaker test%s: plays chimes on the left, then the right speaker, then a\n' "$BLD" "$RST"
+  printf '  rising tone on both. Listen for silence, crackling, buzzing or rattling.\n'
+
+  local out
+  while :; do
+    out=$(default_output)
+    [ -z "$out" ] && out="1 the default output"
+    [ "${out%% *}" = 1 ] && break
+    printf '  %sSound is going to "%s", not the built-in speakers.%s\n' "$YEL" "${out#* }" "$RST"
+    ask "Disconnect headphones/AirPods, then press Enter (s = skip)." "ys"
+    if [ "$ANSWER" = s ]; then NOT_TESTED+=("speakers"); row na "Speaker test" "Skipped"; return; fi
+  done
+  printf '  Playing through: %s\n' "${out#* }"
+
+  VOL_OLD=$(osascript -e 'output volume of (get volume settings)' 2>/dev/null)
+  MUTED_OLD=$(osascript -e 'output muted of (get volume settings)' 2>/dev/null)
+  if [ "$MUTED_OLD" = true ] || { is_int "$VOL_OLD" && [ "$VOL_OLD" -lt 40 ]; }; then
+    is_int "$VOL_OLD" || VOL_OLD=50
+    osascript -e 'set volume output volume 60' -e 'set volume output muted false' >/dev/null 2>&1
+    VOL_CHANGED=1
+    trap 'restore_volume' EXIT
+    printf '  %sVolume raised to 60 %% for the test, restored afterwards.%s\n' "$DIM" "$RST"
+  fi
+
+  local side label
+  for side in left right; do
+    label=$(printf '%s' "$side" | tr '[:lower:]' '[:upper:]')
+    while :; do
+      ask "Press Enter to play the $label speaker (s = skip)." "ys"
+      if [ "$ANSWER" = s ]; then NOT_TESTED+=("$side speaker"); row na "Speaker $side" "Skipped"; continue 2; fi
+      if [ "$(osascript -l JavaScript -e "$AUDIO_JS" "$side" 2>/dev/null)" != ok ]; then
+        row na "Speaker $side" "Could not play a sound"; continue 2
+      fi
+      ask "Heard it clearly, only from the $label side? [y / n / r = repeat]" "ynr"
+      [ "$ANSWER" = r ] || break
+    done
+    if [ "$ANSWER" = y ]; then row ok "Speaker $side" "Works"
+    else row bad "Speaker $side" "Silent, weak or wrong side"; deduct 10 "$label speaker failed the test"; fi
+  done
+
+  while :; do
+    ask "Press Enter to play the rising tone on both speakers (s = skip)." "ys"
+    if [ "$ANSWER" = s ]; then NOT_TESTED+=("speaker sound quality"); row na "Speaker quality" "Skipped"; break; fi
+    osascript -l JavaScript -e "$AUDIO_JS" sweep >/dev/null 2>&1
+    ask "Clean all the way, no crackling, buzzing or rattling? [y / n / r = repeat]" "ynr"
+    [ "$ANSWER" = r ] && continue
+    if [ "$ANSWER" = y ]; then row ok "Speaker quality" "Clean"
+    else row bad "Speaker quality" "Crackling, buzzing or rattling"; deduct 10 "Speakers distort in the sweep test"; fi
+    break
+  done
+
+  restore_volume
+  trap - EXIT
+}
+
+run_tests() {
+  section "HANDS-ON TESTS"
+  if [ "$QUICK" = 1 ]; then
+    NOT_TESTED+=("display" "speakers"); row na "Display & speakers" "Skipped (--quick)"; return
+  fi
+  if ! have_tty; then
+    NOT_TESTED+=("display" "speakers"); row na "Display & speakers" "Skipped (no terminal to answer in)"; return
+  fi
+  ask "Run the display and speaker tests now (about 1 minute)? [Y/n]" "yn"
+  if [ "$ANSWER" = n ]; then
+    NOT_TESTED+=("display" "speakers"); row na "Display & speakers" "Skipped"; return
+  fi
+  test_display
+  test_speakers
+}
+
 # ---------- result ----------
+
+tested() { case " ${NOT_TESTED[*]} " in *" $1 "*) return 1 ;; *) return 0 ;; esac; }
 
 summary() {
   [ "$SCORE" -lt 0 ] && SCORE=0
@@ -503,17 +685,11 @@ summary() {
   if [ "${#BLOCKERS[@]}" -gt 0 ]; then
     verdict="DO NOT BUY (yet): resolve the blockers first"; vcol=$RED
   elif [ "$SCORE" -ge 75 ]; then
-    verdict="Looks healthy: OK to buy after the manual checks"; vcol=$GRN
+    verdict="Looks healthy: OK to buy after the checks below"; vcol=$GRN
   elif [ "$SCORE" -ge 60 ]; then
     verdict="Usable, but only at a clear discount"; vcol=$YEL
   else
     verdict="Not recommended"; vcol=$RED
-  fi
-
-  if [ "${BAT_REPLACE:-0}" = 1 ]; then
-    hint "Battery replacement due: roughly EUR 150-300 at Apple depending on model, take it off the price"
-  elif is_int "$BAT_CAP" && [ "$BAT_CAP" -lt 85 ]; then
-    hint "Battery will need replacing soon: use it to negotiate"
   fi
 
   filled=$((SCORE / 5))
@@ -543,42 +719,42 @@ summary() {
   else
     printf ' %-14s %s\n' "Deductions" "None"
   fi
-  [ -n "$OUTLOOK" ] && printf ' %-14s %s\n' "Rough outlook" "$OUTLOOK"
-  if [ "${#HINTS[@]}" -gt 0 ]; then
-    first=1; for x in "${HINTS[@]}"; do
-      [ $first = 1 ] && printf ' %-14s' "Negotiate" || printf ' %-14s' ""
-      printf ' %s€ %s%s\n' "$YEL" "$x" "$RST"; first=0
-    done
+  if [ "${#NOT_TESTED[@]}" -gt 0 ]; then
+    local list; list=$(printf '%s, ' "${NOT_TESTED[@]}"); list=${list%, }
+    printf ' %-14s %s%s%s\n' "Not tested" "$YEL" "$list" "$RST"
   fi
+  [ -n "$OUTLOOK" ] && printf ' %-14s %s\n' "Rough outlook" "$OUTLOOK"
   printf '%s%s%s\n' "$BLD" "$line" "$RST"
 
   printf '\n%sStill check by hand (a script cannot):%s\n' "$BLD" "$RST"
-  cat <<'EOF'
-  1. Screen: full-screen white, black, red, green, blue. Look for dead
-     pixels, stains, coating damage and bright spots at the edges.
-  2. Keyboard: press every key in TextEdit, check backlight and Touch ID.
-     Trackpad: click in all corners, force click, two-finger scroll.
-  3. Ports: charge from every port, plug a USB stick into each one.
-  4. Speakers (play music), microphone and camera (Photo Booth).
-  5. Wi-Fi: join your phone's hotspot. Bluetooth: pair your headphones.
-  6. Body: dents, bent lid, open screws, liquid marks. A trackpad that
-     bulges or a lid that won't close flat means a swollen battery.
-  7. Deep test: Apple Diagnostics (Apple silicon: hold the power button
-     at start-up, then Cmd-D; Intel: hold D at start-up).
-  8. At handover: seller signs out of their Apple Account, re-run this
-     check (Activation Lock must say "Disabled"), then seller runs
-     System Settings > General > Transfer or Reset > Erase All Content
-     and Settings while you watch.
-EOF
-  printf '\n%smac-check %s, read-only. Nothing was changed or sent anywhere.%s\n\n' "$DIM" "$VERSION" "$RST"
+  local n=0
+  item() { n=$((n + 1)); printf '  %d. %s\n' "$n" "$1"; shift; for x in "$@"; do printf '     %s\n' "$x"; done; }
+  tested display || item "Screen: full-screen white, black, red, green, blue. Look for dead" \
+    "pixels, stains, coating damage and bright spots at the edges."
+  item "Keyboard: press every key in TextEdit, check backlight and Touch ID." \
+    "Trackpad: click in all corners, force click, two-finger scroll."
+  item "Ports: charge from every port, plug a USB stick into each one."
+  if tested speakers; then item "Microphone and camera (Photo Booth)."
+  else item "Speakers (play music), microphone and camera (Photo Booth)."; fi
+  item "Wi-Fi: join your phone's hotspot. Bluetooth: pair your headphones."
+  item "Body: dents, bent lid, open screws, liquid marks. A trackpad that" \
+    "bulges or a lid that won't close flat means a swollen battery."
+  item "Deep test: Apple Diagnostics. Shut down, hold the power button until" \
+    "the startup options appear, then press Cmd-D."
+  item "At handover: seller signs out of their Apple Account, re-run this" \
+    "check (Activation Lock must say \"Disabled\"), then seller runs" \
+    "System Settings > General > Transfer or Reset > Erase All Content" \
+    "and Settings while you watch."
+  printf '\n%smac-check %s. Nothing was changed on this Mac or sent anywhere.%s\n\n' "$DIM" "$VERSION" "$RST"
 }
 
 main() {
-  USE_COLOR=1
+  USE_COLOR=1; QUICK=0
   [ -t 1 ] || USE_COLOR=0
   local arg
   for arg in "$@"; do
     case "$arg" in
+      --quick) QUICK=1 ;;
       --no-color) USE_COLOR=0 ;;
       -h|--help) usage; return 0 ;;
       -v|--version) echo "mac-check $VERSION"; return 0 ;;
@@ -586,9 +762,14 @@ main() {
     esac
   done
   if [ "$(uname -s)" != Darwin ]; then echo "mac-check only runs on macOS." >&2; return 1; fi
+  # sysctl reports arm64 hardware even when the shell runs under Rosetta
+  if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" != 1 ]; then
+    echo "mac-check is made for Apple silicon Macs (M1 and later). This Mac has an Intel processor." >&2
+    return 1
+  fi
 
   setup_colors
-  SCORE=100; BLOCKERS=(); DEDUCTIONS=(); HINTS=(); OUTLOOK=""; BAT_REPLACE=0; BAT_CAP=""; BAT_PTS=0
+  SCORE=100; BLOCKERS=(); DEDUCTIONS=(); NOT_TESTED=(); OUTLOOK=""; BAT_PTS=0; VOL_CHANGED=0
 
   printf '\n%smac-check %s%s  used-Mac health check, %s\n' "$BLD" "$VERSION" "$RST" "$(date '+%Y-%m-%d %H:%M')"
   collect
@@ -598,6 +779,7 @@ main() {
   check_storage
   check_hardware
   check_stability
+  run_tests
   summary
 }
 
